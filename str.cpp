@@ -54,6 +54,7 @@ unsigned int str_octal_to_uint(const char * str) {
 		
 		result <<= 3;
 		result |= (digit - '0');
+		++str;
 	}
 	return result;
 }

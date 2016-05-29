@@ -21,9 +21,13 @@
 #include <cstring>
 #include <ctype.h>
 
-
+#include <pwd.h>
+#include <shadow.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/socket.h>
+#include <pwd.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/select.h>
 
@@ -34,4 +38,10 @@
 	} while(0)
 
 #define CONF_FILE_NAME "miniftp.conf"
+
+
+#define MAX_COMMAND_LINE 1024
+#define MAX_COMMAND 32
+#define MAX_ARG 1024
+
 #endif //_COMMON_H_

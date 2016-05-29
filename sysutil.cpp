@@ -1,0 +1,157 @@
+/*************************************************************************
+	> File Name: sysutil.cpp
+	> Author: lidongmeng
+	> Mail: lidongmeng@ict.ac.cn
+	> Created Time: Wed 25 May 2016 10:08:51 PM PDT
+ ************************************************************************/
+
+#include "sysutil.h"
+
+// use the specific host and port to build the server
+// establish a socket and bind socket to the port and ip
+// return the sockfd if succeed or -1 if failed
+int tcp_server(const char * host, unsigned short port) {
+    // establish a socket
+	int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (listenfd < 0) ERR_EXIT("socket");
+		
+	// fill the sockaddr
+	struct sockaddr_in serverAddr;
+	// initilization
+	memset(&serverAddr, 0, sizeof(serverAddr));
+	serverAddr.sin_family = AF_INET;
+	if (host != NULL) {
+         // judge host: hostname or ip
+		 if (inet_aton(host, &serverAddr.sin_addr) == 0) { // 0 stands for host not by ip
+			struct hostent * hp;
+			hp = gethostbyname(host);
+			if (hp == NULL) ERR_EXIT("gethostbyname"); // by host name
+			serverAddr.sin_addr = *(struct in_addr*)hp->h_addr;
+		 }
+	} else {
+		serverAddr.sin_addr.s_addr = htonl(INADDR_ANY); // network byte sequence --l
+	}
+	serverAddr.sin_port = htons(port);
+
+    // reuse the sockfd
+    int on = 1;
+	if ((setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&on, sizeof(on))) < 0) ERR_EXIT("setsockopt");
+	// bind
+	if (bind(listenfd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) ERR_EXIT("bind");
+	// listen
+	if (listen(listenfd, 1024) < 0) ERR_EXIT("listen");
+
+	return listenfd;
+}
+
+
+int accept_timeout(int fd, struct sockaddr_in * addr, unsigned int wait_seconds) {
+	int ret;
+	socklen_t addrlen = sizeof(socklen_t);
+
+	if (wait_seconds > 0) {
+		fd_set accept_fdset;
+		struct timeval timeout;
+		FD_ZERO(&accept_fdset);
+		FD_SET(fd, &accept_fdset);
+		timeout.tv_sec = wait_seconds;
+		timeout.tv_usec = 0;
+		do {
+			ret = select(fd + 1, &accept_fdset, NULL, NULL, &timeout);
+		} while (ret < 0 && errno == EINTR);
+
+		if (ret == -1) {
+			return -1;
+		} else if (ret == 0) {
+			errno = ETIMEDOUT;
+				return -1;
+		}
+	}
+
+	if (addr != NULL) {
+		ret = accept(fd, (struct sockaddr*)&addr, &addrlen);
+	} else {
+		ret = accept(fd, NULL, NULL);
+	}
+	return ret;
+}
+
+
+ssize_t readn(int fd, void * buf, size_t count) {
+	size_t nleft = count;
+	size_t nread;
+	char * p = (char*)buf;
+
+	while (nleft > 0) {
+		if ((nread = read(fd, buf, nleft)) < 0) {
+			if (errno == EINTR) continue;
+			else return -1;
+		} else if (nread == 0) {
+			return count - nleft;
+		} else {
+			p += nread;
+			nleft -= nread;
+		}
+	}
+	return count;
+}
+
+ssize_t recv_peek(int fd, void * buf, size_t len) {
+	while (1) {
+		int ret = recv(fd, buf, len, MSG_PEEK);
+		if (ret == -1 && errno == EINTR) continue;
+		else return ret;
+	}
+}
+
+ssize_t writen(int fd, const void * buf, size_t count) {
+	size_t nleft = count;
+	char * p = (char*)buf;
+	size_t nwritten;
+
+	while (nleft > 0) {
+		if ((nwritten = write(fd, p, nleft)) < 0) {
+			if (errno == EINTR) continue;
+			else return -1;
+		} else if (nwritten == 0) {
+			continue;
+		} else {
+			nleft -= nwritten;
+			p += nwritten;
+		}
+	}
+	return count;
+}
+
+ssize_t readline(int sock_fd, void * buf, size_t max_len) {
+	int ret;
+	int nread;
+	char * p = (char*)buf;
+	int nleft = max_len;
+
+
+	while (1) {
+		ret = recv_peek(sock_fd, p, nleft);
+		if (ret < 0) return ret;
+		else if (ret == 0) return ret;
+
+		nread = ret;
+		for (int i = 0; i < nread; ++i) {
+			if (p[i] == '\n') {
+				ret = readn(sock_fd, p, i+1);
+				if (ret != i+1) exit(EXIT_FAILURE);
+				return ret;
+			}
+		}
+
+		if (nread > nleft) exit(EXIT_FAILURE);
+		nleft -= nread;
+
+		ret = readn(sock_fd, p, nread);
+		if (ret != nread) exit(EXIT_FAILURE);
+
+		p += nread;
+	}
+
+	return -1;
+}
