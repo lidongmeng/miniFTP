@@ -46,6 +46,7 @@ void str_to_upper(char * str) {
 
 // parse the octal number to unsigned int
 unsigned int str_octal_to_uint(const char * str) {
+	printf("str_octal_to_uint: %s\n", str);
 	unsigned int result = 0;
 	while (*str && *str == '0') ++str;
 	while (*str) {

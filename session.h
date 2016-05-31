@@ -15,10 +15,20 @@ struct session_t {
 	char cmdline[MAX_COMMAND_LINE];
 	char cmd[MAX_COMMAND];
 	char arg[MAX_ARG];
+
+	// data connect
+	struct sockaddr_in * port_addr;
+	int pasv_listen_fd;
+	int data_fd;
+	int data_process;
+	
 	// pipe of father and child
 	int parent_fd;
 	int child_fd;
 
+	// ftp 
+	int is_ascii;
+	char * rnfr_name;
 };
 
 

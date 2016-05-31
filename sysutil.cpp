@@ -7,6 +7,56 @@
 
 #include "sysutil.h"
 
+void activate_nonblock(int fd) {
+	int ret;
+	int flags = fcntl(fd, F_GETFL);
+	if (flags == -1) {
+		ERR_EXIT("fcntl");
+	}
+
+	flags |= O_NONBLOCK;
+	ret = fcntl(fd, F_SETFL, flags);
+	if (ret == -1) ERR_EXIT("fcntl");
+}
+
+void deactivate_nonblock(int fd) {
+	int ret;
+	int flags = fcntl(fd, F_GETFL);
+	if (flags == -1) ERR_EXIT("fcntl");
+
+	flags &= ~O_NONBLOCK;
+	ret = fcntl(fd, F_SETFL, flags);
+	if (ret == -1) ERR_EXIT("fcntl");
+}
+
+
+int tcp_client(unsigned short port) {
+	int sock;
+	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+		ERR_EXIT("tcp_client");
+	}
+
+	if (port > 0) {
+		int on = 1;
+		if ((setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&on, sizeof(on))) < 0) {
+			ERR_EXIT("setsockopt");
+		}
+
+		char ip[16] = {0};
+		getlocalip(ip);
+		struct sockaddr_in localaddr;
+		memset(&localaddr, 0, sizeof(localaddr));
+		localaddr.sin_family = AF_INET;
+		localaddr.sin_port = htons(port);
+		localaddr.sin_addr.s_addr = inet_addr(ip);
+		if (bind(sock, (struct sockaddr*)&localaddr, sizeof(localaddr)) < 0) {
+			ERR_EXIT("bind");
+		}
+	}
+	return sock;
+}
+
+
 // use the specific host and port to build the server
 // establish a socket and bind socket to the port and ip
 // return the sockfd if succeed or -1 if failed
@@ -44,6 +94,19 @@ int tcp_server(const char * host, unsigned short port) {
 	return listenfd;
 }
 
+int getlocalip(char * ip) {
+	int sockfd;
+	if (-1 == (sockfd = socket(AF_INET, SOCK_STREAM, 0))) ERR_EXIT("socket");
+	struct ifreq req;
+	struct sockaddr_in * host;
+	bzero(&req, sizeof(struct ifreq));
+	strcpy(req.ifr_name, "eth0");
+	ioctl(sockfd, SIOCGIFADDR, &req);
+	host = (struct sockaddr_in*)&req.ifr_addr;
+	strcpy(ip, inet_ntoa(host->sin_addr));
+	close(sockfd);
+	return 1;
+}
 
 int accept_timeout(int fd, struct sockaddr_in * addr, unsigned int wait_seconds) {
 	int ret;
@@ -72,6 +135,53 @@ int accept_timeout(int fd, struct sockaddr_in * addr, unsigned int wait_seconds)
 		ret = accept(fd, (struct sockaddr*)&addr, &addrlen);
 	} else {
 		ret = accept(fd, NULL, NULL);
+	}
+	return ret;
+}
+
+int connect_timeout(int fd, struct sockaddr_in * addr, unsigned int wait_seconds) {
+	int ret;
+	socklen_t addrlen = sizeof(struct sockaddr_in);
+
+	if (wait_seconds > 0) activate_nonblock(fd);
+
+	ret = connect(fd, (struct sockaddr*)addr, addrlen);
+
+	if (ret < 0 && errno == EINPROGRESS) {
+		fd_set connect_fdset;
+		struct timeval timeout;
+		FD_ZERO(&connect_fdset);
+		FD_SET(fd, &connect_fdset);
+		timeout.tv_sec = wait_seconds;
+		timeout.tv_usec = 0;
+
+		do {
+			ret = select(fd + 1, NULL, &connect_fdset, NULL, &timeout);
+		} while (ret < 0 && errno == EINTR);
+
+		if (ret == 0) {
+			ret = -1;
+			errno = ETIMEDOUT;
+		} else if (ret < 0) {
+			return -1;
+		} else if (ret == 1) {
+			int err;
+			socklen_t socklen = sizeof(err);
+			int sockoptret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &socklen);
+			if (sockoptret == -1) {
+				return -1;
+			}
+			if (err == 0) {
+				ret = 0;
+			} else {
+				errno = err;
+				ret = -1;
+			}
+		}
+	}
+
+	if (wait_seconds > 0) {
+		deactivate_nonblock(fd);
 	}
 	return ret;
 }
@@ -105,6 +215,7 @@ ssize_t recv_peek(int fd, void * buf, size_t len) {
 }
 
 ssize_t writen(int fd, const void * buf, size_t count) {
+	//printf("writen:%s", buf);
 	size_t nleft = count;
 	char * p = (char*)buf;
 	size_t nwritten;
@@ -154,4 +265,175 @@ ssize_t readline(int sock_fd, void * buf, size_t max_len) {
 	}
 
 	return -1;
+}
+
+void send_fd(int sock_fd, int fd)
+{
+    int ret;
+    struct msghdr msg;
+    struct cmsghdr *p_cmsg;
+    struct iovec vec;
+    char cmsgbuf[CMSG_SPACE(sizeof(fd))];
+    int *p_fds;
+    char sendchar = 0;
+    msg.msg_control = cmsgbuf;
+    msg.msg_controllen = sizeof(cmsgbuf);
+    p_cmsg = CMSG_FIRSTHDR(&msg);
+    p_cmsg->cmsg_level = SOL_SOCKET;
+    p_cmsg->cmsg_type = SCM_RIGHTS;
+    p_cmsg->cmsg_len = CMSG_LEN(sizeof(fd));
+    p_fds = (int*)CMSG_DATA(p_cmsg);
+    *p_fds = fd;
+
+    msg.msg_name = NULL;
+    msg.msg_namelen = 0;
+    msg.msg_iov = &vec;
+    msg.msg_iovlen = 1;
+    msg.msg_flags = 0;
+
+    vec.iov_base = &sendchar;
+    vec.iov_len = sizeof(sendchar);
+    ret = sendmsg(sock_fd, &msg, 0);
+    if (ret != 1)
+        ERR_EXIT("sendmsg");
+}
+
+int recv_fd(const int sock_fd)
+{
+    int ret;
+    struct msghdr msg;
+    char recvchar;
+    struct iovec vec;
+    int recv_fd;
+    char cmsgbuf[CMSG_SPACE(sizeof(recv_fd))];
+    struct cmsghdr *p_cmsg;
+    int *p_fd;
+    vec.iov_base = &recvchar;
+    vec.iov_len = sizeof(recvchar);
+    msg.msg_name = NULL;
+    msg.msg_namelen = 0;
+    msg.msg_iov = &vec;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsgbuf;
+    msg.msg_controllen = sizeof(cmsgbuf);
+    msg.msg_flags = 0;
+
+    p_fd = (int*)CMSG_DATA(CMSG_FIRSTHDR(&msg));
+    *p_fd = -1;
+    ret = recvmsg(sock_fd, &msg, 0);
+    if (ret != 1)
+        ERR_EXIT("recvmsg");
+
+    p_cmsg = CMSG_FIRSTHDR(&msg);
+    if (p_cmsg == NULL)
+        ERR_EXIT("no passed fd");
+
+
+    p_fd = (int*)CMSG_DATA(p_cmsg);
+    recv_fd = *p_fd;
+    if (recv_fd == -1)
+        ERR_EXIT("no passed fd");
+
+    return recv_fd;
+}
+
+const char* statbuf_get_perms(struct stat *sbuf)
+{
+    static char perms[] = "----------";
+    perms[0] = '?';
+
+    mode_t mode = sbuf->st_mode;
+    switch (mode & S_IFMT)
+    {
+    case S_IFREG:
+        perms[0] = '-';
+        break;
+    case S_IFDIR:
+        perms[0] = 'd';
+        break;
+    case S_IFLNK:
+        perms[0] = 'l';
+        break;
+    case S_IFIFO:
+        perms[0] = 'p';
+        break;
+    case S_IFSOCK:
+        perms[0] = 's';
+        break;
+    case S_IFCHR:
+        perms[0] = 'c';
+        break;
+    case S_IFBLK:
+        perms[0] = 'b';
+        break;
+    }
+
+    if (mode & S_IRUSR)
+    {
+        perms[1] = 'r';
+    }
+    if (mode & S_IWUSR)
+    {
+        perms[2] = 'w';
+    }
+    if (mode & S_IXUSR)
+    {
+        perms[3] = 'x';
+    }
+    if (mode & S_IRGRP)
+    {
+        perms[4] = 'r';
+    }
+    if (mode & S_IWGRP)
+    {
+        perms[5] = 'w';
+    }
+    if (mode & S_IXGRP)
+    {
+        perms[6] = 'x';
+    }
+    if (mode & S_IROTH)
+    {
+        perms[7] = 'r';
+    }
+    if (mode & S_IWOTH)
+    {
+        perms[8] = 'w';
+    }
+    if (mode & S_IXOTH)
+    {
+        perms[9] = 'x';
+    }
+    if (mode & S_ISUID)
+    {
+        perms[3] = (perms[3] == 'x') ? 's' : 'S';
+    }
+    if (mode & S_ISGID)
+    {
+        perms[6] = (perms[6] == 'x') ? 's' : 'S';
+    }
+    if (mode & S_ISVTX)
+    {
+        perms[9] = (perms[9] == 'x') ? 't' : 'T';
+    }
+
+    return perms;
+}
+
+const char* statbuf_get_date(struct stat *sbuf)
+{
+    static char datebuf[64] = {0};
+    const char *p_date_format = "%b %e %H:%M";
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    time_t local_time = tv.tv_sec;
+    if (sbuf->st_mtime > local_time || (local_time - sbuf->st_mtime) > 60*60*24*182)
+    {
+        p_date_format = "%b %e  %Y";
+    }
+
+    struct tm* p_tm = localtime(&local_time);
+    strftime(datebuf, sizeof(datebuf), p_date_format, p_tm);
+
+    return datebuf;
 }

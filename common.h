@@ -20,6 +20,10 @@
 #include <unistd.h>
 #include <cstring>
 #include <ctype.h>
+#include <time.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 
 #include <pwd.h>
 #include <shadow.h>
