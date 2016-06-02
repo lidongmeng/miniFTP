@@ -28,7 +28,9 @@ struct session_t {
 
 	// ftp 
 	int is_ascii;
+	long long restart_pos;
 	char * rnfr_name;
+
 };
 
 

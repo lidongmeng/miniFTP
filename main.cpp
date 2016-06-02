@@ -47,7 +47,7 @@ int main() {
 		NULL, -1, -1, -1,
 		-1, -1,
 
-		0, NULL
+		0, 0, NULL
 	};
 
 

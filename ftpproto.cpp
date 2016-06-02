@@ -41,7 +41,7 @@ static void do_rnfr(session_t * sess);
 static void do_rnto(session_t * sess);
 static void do_size(session_t * sess);
 static void do_pasv(session_t * sess);
-
+static void do_retr(session_t * sess);
 
 static void do_site_chmod(session_t * sess, char * chmod_arg);
 static void do_site_umask(session_t * sess, char * umask_arg);
@@ -76,7 +76,9 @@ static ftpcmd_t ctrl_cmds[] =
 	{"RNTO", do_rnto},
 	{"SITE", do_site},
 	{"SIZE", do_size},
-	{"PASV", do_pasv}
+	{"PASV", do_pasv},
+
+	{"RETR", do_retr}
 };
 
 void handle_child(session_t * sess) {
@@ -558,4 +560,77 @@ void do_size(session_t * sess) {
 	char text[1024] = {0};
 	sprintf(text, "%lld", (long long)buf.st_size);
 	ftp_reply(sess, FTP_SIZEOK, text);
+}
+
+
+void do_retr(session_t * sess) {
+	printf("do_retr\n");
+	if (get_transfer_fd(sess) == 0) return ;
+
+	long long offset = sess->restart_pos;
+	sess->restart_pos = 0;
+
+	int fd = open(sess->arg, O_RDONLY);
+	if (fd == -1) {
+		ftp_reply(sess, FTP_FILEFAIL, "Fail to open file.");
+		return ;
+	}
+
+	int ret = lock_file_read(fd);
+	if (-1 == ret) {
+		ftp_reply(sess, FTP_FILEFAIL, "Fail to open file.");
+		return ;
+	}
+
+	struct stat sbuf;
+	ret = fstat(fd, &sbuf);
+	if (!S_ISREG(sbuf.st_mode)) {
+		ftp_reply(sess, FTP_FILEFAIL, "Fail to open file.");
+		return ;
+	}
+
+	if (offset != 0) {
+		lseek(fd, offset, SEEK_SET);
+	}
+
+	char text[1024] = {0};
+	if (sess->is_ascii) {
+		sprintf(text, "Opening ASCII mode data connection for %s (%lld bytes).", sess->arg, (long long)sbuf.st_size);
+	} else {
+		sprintf(text, "Opening BINARY mode data connection for %s (%lld bytes).", sess->arg, (long long)sbuf.st_size);
+	}
+
+	ftp_reply(sess, FTP_DATACONN, text);
+
+	// start to transmission the file
+	long long bytes_to_send = sbuf.st_size;
+	if (offset > bytes_to_send) {
+		bytes_to_send = 0;
+	} else {
+		bytes_to_send -= offset;
+	}
+
+	char buf[4096];
+	int flag = 0;
+	while (bytes_to_send > 0) {
+		int sendNum = (bytes_to_send <= 4096) ? bytes_to_send : 4096;
+		ret = sendfile(sess->data_fd, fd, NULL, sendNum);
+		if (ret == -1) {
+			flag = 2;
+			break;
+		}
+		bytes_to_send -= ret;
+	}
+
+	if (bytes_to_send == 0) flag = 0;
+
+	close(sess->data_fd);
+	sess->data_fd = -1;
+	close(fd);
+
+	if (flag == 2) {
+		ftp_reply(sess, FTP_BADSENDNET, "Failing to write to network stream.");
+	} else if (flag == 0) {
+		ftp_reply(sess, FTP_TRANSFEROK, "Transfer complete.");
+	}
 }
