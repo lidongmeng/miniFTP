@@ -96,12 +96,12 @@ int tcp_server(const char * host, unsigned short port) {
 
 int getlocalip(char * ip) {
 	int sockfd;
-	if (-1 == (sockfd = socket(AF_INET, SOCK_STREAM, 0))) ERR_EXIT("socket");
+	if (-1 == (sockfd = socket(PF_INET, SOCK_STREAM, 0))) ERR_EXIT("socket");
 	struct ifreq req;
 	struct sockaddr_in * host;
 	bzero(&req, sizeof(struct ifreq));
-	strcpy(req.ifr_name, "eth0");
-	ioctl(sockfd, SIOCGIFADDR, &req);
+	strcpy(req.ifr_name, "ens33");
+	if (ioctl(sockfd, SIOCGIFADDR, &req) == -1) ERR_EXIT("ioctl");
 	host = (struct sockaddr_in*)&req.ifr_addr;
 	strcpy(ip, inet_ntoa(host->sin_addr));
 	close(sockfd);

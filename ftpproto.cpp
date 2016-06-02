@@ -40,12 +40,15 @@ static void do_delete(session_t * sess);
 static void do_rnfr(session_t * sess);
 static void do_rnto(session_t * sess);
 static void do_size(session_t * sess);
+static void do_pasv(session_t * sess);
+
 
 static void do_site_chmod(session_t * sess, char * chmod_arg);
 static void do_site_umask(session_t * sess, char * umask_arg);
 static void do_site(session_t * sess);
 int get_port_fd(session_t * sess);
 int port_active(session_t * sess);
+int pasv_active(session_t * sess);
 int get_transfer_fd(session_t * sess);
 
 static ftpcmd_t ctrl_cmds[] = 
@@ -72,7 +75,8 @@ static ftpcmd_t ctrl_cmds[] =
 	{"RNFR", do_rnfr},
 	{"RNTO", do_rnto},
 	{"SITE", do_site},
-	{"SIZE", do_size}
+	{"SIZE", do_size},
+	{"PASV", do_pasv}
 };
 
 void handle_child(session_t * sess) {
@@ -221,6 +225,25 @@ void do_port(session_t * sess) {
 	ftp_reply(sess, FTP_PORTOK, "PORT command successful. Consider using PORT.");
 }
 
+
+void do_pasv(session_t * sess) {
+	char ip[16] ={0};
+	getlocalip(ip);
+
+	priv_sock_send_cmd(sess->child_fd, PRIV_SOCK_PASV_LISTEN);
+	unsigned short port = (int) priv_sock_get_int(sess->child_fd);
+
+	unsigned int v[4];
+	sscanf(ip, "%u.%u.%u.%u", &v[0], &v[1], &v[2], &v[3]);
+	char text[1024] = {0};
+	sprintf(text, "Entering Passive Mode (%u,%u,%u,%u,%u,%u).",
+			v[0], v[1], v[2], v[3], port >> 8, port&0xFF);
+
+	printf("do_pasv: %s\n", text);
+	ftp_reply(sess, FTP_PASVOK, text);
+}
+
+
 int port_active(session_t * sess) {
 	printf("port_active\n");
 	if (sess->port_addr) {
@@ -229,6 +252,20 @@ int port_active(session_t * sess) {
 	return 0;
 }
 
+int pasv_active(session_t * sess) {
+	printf("pasv_active\n");
+	priv_sock_send_cmd(sess->child_fd, PRIV_SOCK_PASV_ACTIVE);
+	int active = priv_sock_get_int(sess->child_fd);
+	if (active) {
+		if (port_active(sess)) {
+			ERR_EXIT("boht port and pasv are active.");
+		}
+		return 1;
+	}
+	return 0;
+}
+
+
 // connect to client
 int get_port_fd(session_t * sess) {
     // communicate with parent using unix field socket
@@ -236,7 +273,7 @@ int get_port_fd(session_t * sess) {
 	priv_sock_send_cmd(sess->child_fd, PRIV_SOCK_GET_DATA_SOCK);
 	unsigned short port = ntohs(sess->port_addr->sin_port);
 	char *ip = inet_ntoa(sess->port_addr->sin_addr);
-	priv_sock_send_init(sess->child_fd, (int)port);
+	priv_sock_send_int(sess->child_fd, (int)port);
 	priv_sock_send_buf(sess->child_fd, ip, strlen(ip));
 
 	char res = priv_sock_get_result(sess->child_fd);
@@ -248,18 +285,40 @@ int get_port_fd(session_t * sess) {
 	return 1;
 }
 
+int get_pasv_fd(session_t * sess) {
+	printf("get_pasv_fd\n");
+	priv_sock_send_cmd(sess->child_fd, PRIV_SOCK_PASV_ACCEPT);
+	char res = priv_sock_get_result(sess->child_fd);
+
+	if (res == PRIV_SOCK_RESULT_BAD) {
+		return 0;
+	} else if (res == PRIV_SOCK_RESULT_OK) {
+		sess->data_fd = priv_sock_recv_fd(sess->child_fd);
+	}
+
+	return 1;
+}
+
 int get_transfer_fd(session_t * sess) {
 	printf("get_transfer_fd\n");
-	if (port_active(sess) == 0) {
+	if (port_active(sess) == 0 && pasv_active(sess) == 0) {
 		ftp_reply(sess, FTP_BADSENDCONN, "Use PORT or PASV first.");
 		return 0;
 	}
 
 	printf("port_active\n");
 	int ret = 1;
-	if (get_port_fd(sess) == 0) {
-		printf("get_port_fd == 0");
-		ret = 0;
+	if (port_active(sess)) {
+		if (get_port_fd(sess) == 0) {
+			printf("get_port_fd == 0\n");
+			ret = 0;
+		}
+	}
+
+	if (pasv_active(sess)) {
+		if (get_pasv_fd(sess) == 0) {
+			ret = 0;
+		}
 	}
 
 	if (sess->port_addr) {
@@ -271,6 +330,10 @@ int get_transfer_fd(session_t * sess) {
 }
 
 
+
+/**
+ *command about file operation
+ */
 int list_common(session_t * sess, int detail) {
     //printf("list_common\n");
 	DIR * dir = opendir(".");

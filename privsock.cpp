@@ -88,14 +88,14 @@ char priv_sock_get_result(int fd) {
 	return res;
 }
 
-void priv_sock_send_init(int fd, int the_int) {
+void priv_sock_send_int(int fd, int the_int) {
 	int ret = writen(fd, &the_int, sizeof(the_int));
 	if (ret != sizeof(the_int)) {
 		ERR_EXIT("priv_sock_send_init");
 	}
 }
 
-int priv_sock_get_init(int fd) {
+int priv_sock_get_int(int fd) {
 	int the_int;
 	int ret;
 	ret = readn(fd, &the_int, sizeof(the_int));
@@ -106,7 +106,7 @@ int priv_sock_get_init(int fd) {
 }
 
 void priv_sock_send_buf(int fd, const char * buf, unsigned int len) {
-	priv_sock_send_init(fd, (int)len);
+	priv_sock_send_int(fd, (int)len);
 	int ret = writen(fd, buf, len);
 	if (ret != (int)len) {
 		ERR_EXIT("priv_sock_send_buf");
@@ -114,7 +114,7 @@ void priv_sock_send_buf(int fd, const char * buf, unsigned int len) {
 }
 
 void priv_sock_recv_buf(int fd, char * buf, unsigned int len) {
-	unsigned int recv_len = (unsigned int)priv_sock_get_init(fd);
+	unsigned int recv_len = (unsigned int)priv_sock_get_int(fd);
 	if (recv_len > len) {
 		ERR_EXIT("priv_sock_recv_buf");
 	}

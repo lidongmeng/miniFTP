@@ -31,4 +31,9 @@ const char * statbuf_get_date(struct stat * sbuf);
 
 void send_fd(int sock_fd, int fd);
 int recv_fd(const int sock_fd);
+
+int lock_file_read(int fd);
+int lock_file_wrtie(int fd);
+int unlock_file(int fd);
+
 #endif // _SYSUTIL_H
