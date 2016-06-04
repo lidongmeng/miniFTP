@@ -45,6 +45,7 @@ int main() {
 	session_t sess = {
 		-1, -1, "", "", "",
 		NULL, -1, -1, -1,
+		0, 0, 0, 0,
 		-1, -1,
 
 		0, 0, NULL
@@ -59,6 +60,8 @@ int main() {
 		printf("receive a connection: %d\n", connfd);
 		// begin session
 		pid = fork();
+		sess.bw_download_rate_max = tunable_download_max_rate;
+		sess.bw_upload_rate_max = tunable_upload_max_rate;
 		if (pid == -1) {
 			ERR_EXIT("fork");
 		} else if (pid == 0) { // child

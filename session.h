@@ -21,7 +21,13 @@ struct session_t {
 	int pasv_listen_fd;
 	int data_fd;
 	int data_process;
-	
+
+	// limit control
+	unsigned int bw_upload_rate_max;
+	unsigned int bw_download_rate_max;
+	long bw_transfer_start_sec;
+	long bw_transfer_start_usec;
+
 	// pipe of father and child
 	int parent_fd;
 	int child_fd;

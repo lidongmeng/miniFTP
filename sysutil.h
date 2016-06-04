@@ -33,7 +33,11 @@ void send_fd(int sock_fd, int fd);
 int recv_fd(const int sock_fd);
 
 int lock_file_read(int fd);
-int lock_file_wrtie(int fd);
+int lock_file_write(int fd);
 int unlock_file(int fd);
 
+
+long get_time_ses();
+long get_time_uses();
+void nano_sleep(double seconds);
 #endif // _SYSUTIL_H

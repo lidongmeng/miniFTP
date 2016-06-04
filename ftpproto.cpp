@@ -42,6 +42,9 @@ static void do_rnto(session_t * sess);
 static void do_size(session_t * sess);
 static void do_pasv(session_t * sess);
 static void do_retr(session_t * sess);
+static void do_stor(session_t * sess);
+static void do_appe(session_t * sess);
+
 
 static void do_site_chmod(session_t * sess, char * chmod_arg);
 static void do_site_umask(session_t * sess, char * umask_arg);
@@ -78,7 +81,9 @@ static ftpcmd_t ctrl_cmds[] =
 	{"SIZE", do_size},
 	{"PASV", do_pasv},
 
-	{"RETR", do_retr}
+	{"RETR", do_retr},
+	{"STOR", do_stor},
+	{"APPE", do_appe}
 };
 
 void handle_child(session_t * sess) {
@@ -562,6 +567,52 @@ void do_size(session_t * sess) {
 	ftp_reply(sess, FTP_SIZEOK, text);
 }
 
+void limit_rate(session_t * sess, int bytes_transfered, int is_upload) {
+	printf("limit_rate: %d\n", bytes_transfered);
+	long curr_ses = get_time_ses();
+	long curr_uses = get_time_uses();
+
+	double elapsed;
+	elapsed = (double) (curr_ses - sess->bw_transfer_start_sec);
+	elapsed += (double)(curr_uses - sess->bw_transfer_start_usec) / (double)1000000;
+
+	printf("elapsed time:%lf\n", elapsed);
+	if (elapsed <= (double)0) {
+		elapsed = (double)0.01;
+	}
+    printf("elapsed time:%lf\n", elapsed);
+	unsigned int bw_rate = (unsigned int)((double)bytes_transfered / elapsed);
+
+	printf("bw_rate: %d\n", bw_rate);
+	double rate_ratio = 0;
+	if (is_upload) {
+		// upload
+	     if (bw_rate < sess->bw_upload_rate_max) {
+			sess->bw_transfer_start_sec = get_time_ses();
+			sess->bw_transfer_start_usec = get_time_uses();
+			return ;
+		}
+		printf("bw_upload_rate_max:%d\n", sess->bw_upload_rate_max);
+		rate_ratio = bw_rate / sess->bw_upload_rate_max;
+		printf("rate_ratio:%d\n", rate_ratio);
+	} else {
+		if (bw_rate < sess->bw_download_rate_max) {
+			sess->bw_transfer_start_sec = get_time_ses();
+			sess->bw_transfer_start_usec = get_time_uses();
+			return ;
+		}
+		printf("bw_download_rate_max:%d\n", sess->bw_download_rate_max);
+		rate_ratio = bw_rate / sess->bw_download_rate_max;
+		printf("rate_ratio:%d\n", rate_ratio);
+	}
+
+	printf("rate_ratio:%d\n", rate_ratio);
+	double pause_time = (rate_ratio - (double)1) * elapsed;
+	nano_sleep(pause_time);
+
+	sess->bw_transfer_start_sec = get_time_ses();
+	sess->bw_transfer_start_usec = get_time_uses();
+}
 
 void do_retr(session_t * sess) {
 	printf("do_retr\n");
@@ -612,6 +663,9 @@ void do_retr(session_t * sess) {
 
 	char buf[4096];
 	int flag = 0;
+	
+	sess->bw_transfer_start_sec = get_time_ses();
+	sess->bw_transfer_start_usec = get_time_uses();
 	while (bytes_to_send > 0) {
 		int sendNum = (bytes_to_send <= 4096) ? bytes_to_send : 4096;
 		ret = sendfile(sess->data_fd, fd, NULL, sendNum);
@@ -619,6 +673,7 @@ void do_retr(session_t * sess) {
 			flag = 2;
 			break;
 		}
+		limit_rate(sess, ret, 0);
 		bytes_to_send -= ret;
 	}
 
@@ -633,4 +688,100 @@ void do_retr(session_t * sess) {
 	} else if (flag == 0) {
 		ftp_reply(sess, FTP_TRANSFEROK, "Transfer complete.");
 	}
+}
+
+void upload_common(session_t * sess, int is_append) {
+	printf("upload_common\n");
+	if (get_transfer_fd(sess) == 0) {
+		return;
+	}
+
+	long long offset = sess->restart_pos;
+	sess->restart_pos = 0;
+
+	int fd = open(sess->arg, O_CREAT | O_WRONLY, 0666);
+	if (fd == -1) ERR_EXIT("open");
+
+	printf("lock file write\n");
+	int ret = lock_file_write(fd);
+	if (ret == -1) {
+		ftp_reply(sess, FTP_FILEFAIL, "Could not create file.");
+		return ;
+	}
+
+	if (!is_append && offset == 0) {
+		ftruncate(fd, 0);
+		if (lseek(fd, 0, SEEK_SET) < 0) {
+			ftp_reply(sess, FTP_UPLOADFAIL, "Could not create file.");
+			return ;
+		}
+	} else if (!is_append && 0 != offset) {
+		if (lseek(fd, offset, SEEK_SET) < 0) {
+			ftp_reply(sess, FTP_UPLOADFAIL, "Could not create file.");
+			return ;
+		}
+	} else if (is_append) {
+		if (lseek(fd, 0, SEEK_END) < 0) {
+			ftp_reply(sess, FTP_UPLOADFAIL, "Could not create file.");
+			return ;
+		}
+	}
+
+	struct stat sbuf;
+	fstat(fd, &sbuf);
+	char text[1024] = {0};
+	if (sess->is_ascii) {
+		sprintf(text , "Opening ASCII mode data connection for %s (%lld bytes).", sess->arg, (long long)sbuf.st_size);
+	} else {
+    	sprintf(text , "Opening BINARY mode data connection for %s (%lld bytes).", sess->arg, (long long)sbuf.st_size);
+	}
+	ftp_reply(sess, FTP_DATACONN, text);
+	printf("begin to upload...\n");
+
+	char buff[65536];
+	int flag = 0;
+
+	sess->bw_transfer_start_sec = get_time_ses();
+	sess->bw_transfer_start_usec = get_time_uses();
+
+	while (1) {
+		ret = read(sess->data_fd, buff, sizeof(buff));
+		if (ret == -1) {
+			if (errno == EINTR) continue;
+	    	flag = 2;
+		    break;
+		} else if (ret == 0) {
+			flag = 0;
+			break;
+		}
+		limit_rate(sess, ret, 1);
+		// abor
+		//
+		if (writen(fd, buff, ret) != ret) {
+			flag = 1;
+			break;
+		}
+	}
+
+	close(sess->data_fd);
+	sess->data_fd = -1;
+	close(fd);
+
+	if (flag == 0) {
+		ftp_reply(sess, FTP_TRANSFEROK, "Transfer complete.");
+	} else if (flag == 1) {
+		ftp_reply(sess, FTP_BADSENDFILE, "Failure writeing to file.");
+	} else if (flag == 2) {
+		ftp_reply(sess, FTP_BADSENDFILE, "Failure reading from network.");
+	}
+
+}
+
+static void do_stor(session_t * sess) {
+	upload_common(sess, 0);
+}
+
+
+static void do_appe(session_t * sess) {
+	upload_common(sess, 1);
 }

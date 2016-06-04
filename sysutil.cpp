@@ -458,7 +458,7 @@ int lock_file_read(int fd) {
 	return lock_internal(fd, F_RDLCK);
 }
 
-int lock_file_wrtie(int fd) {
+int lock_file_write(int fd) {
 	return lock_internal(fd, F_WRLCK);
 }
 
@@ -475,4 +475,31 @@ int unlock_file(int fd) {
 
 	return ret;
 
+}
+
+static struct timeval curr_time;
+
+long get_time_ses() {
+	if (gettimeofday(&curr_time, NULL) < 0) {
+		ERR_EXIT("gettimeofday");
+	}
+	return curr_time.tv_sec;
+}
+
+long get_time_uses() {
+	return curr_time.tv_usec;
+}
+
+void nano_sleep(double seconds) {
+	time_t secs = (time_t)seconds;
+	double fractional = seconds - (double)secs;
+
+	struct timespec ts;
+	ts.tv_sec = secs;
+	ts.tv_nsec = (long)(fractional * (double)1000000000);
+
+	int ret = 0;
+	do {
+		ret = nanosleep(&ts, &ts);
+	} while (ret == -1 && EINTR == errno);
 }
