@@ -1,7 +1,9 @@
-main: main.o str.o tunable.o parseconf.o sysutil.o session.o ftpproto.o privparent.o privsock.o
-	g++ -g -o main main.o str.o tunable.o parseconf.o sysutil.o session.o ftpproto.o privparent.o privsock.o -lcrypt
+main: main.o str.o tunable.o parseconf.o sysutil.o session.o ftpproto.o privparent.o privsock.o hash.o
+	g++ -g -o main main.o str.o tunable.o parseconf.o sysutil.o session.o ftpproto.o privparent.o privsock.o hash.o -lcrypt
 ftpproto.o: ftpproto.cpp
 	g++ -g -c ftpproto.cpp
+hash.o: hash.cpp
+	g++ -g -c hash.cpp
 privsock.o: privsock.cpp
 	g++ -g -c privsock.cpp
 privparent.o: privparent.cpp

@@ -44,7 +44,8 @@ static void do_pasv(session_t * sess);
 static void do_retr(session_t * sess);
 static void do_stor(session_t * sess);
 static void do_appe(session_t * sess);
-
+static void do_abor(session_t * sess);
+static void do_quit(session_t * sess);
 
 static void do_site_chmod(session_t * sess, char * chmod_arg);
 static void do_site_umask(session_t * sess, char * umask_arg);
@@ -83,7 +84,10 @@ static ftpcmd_t ctrl_cmds[] =
 
 	{"RETR", do_retr},
 	{"STOR", do_stor},
-	{"APPE", do_appe}
+	{"APPE", do_appe},
+	{"ABOR", do_abor},
+	{"\377\364\377\362ABOR", do_abor},
+	{"QUIT", do_quit}
 };
 
 void handle_child(session_t * sess) {
@@ -777,11 +781,20 @@ void upload_common(session_t * sess, int is_append) {
 
 }
 
-static void do_stor(session_t * sess) {
+void do_stor(session_t * sess) {
 	upload_common(sess, 0);
 }
 
-
-static void do_appe(session_t * sess) {
+void do_appe(session_t * sess) {
 	upload_common(sess, 1);
+}
+
+void do_abor(session_t * sess) {
+	ftp_reply(sess, FTP_ABOR_NOCONN, "No transfer to ABOR.");
+}
+
+void do_quit(session_t * sess) {
+	printf("do_quit\n");
+	ftp_reply(sess, FTP_GOODBYE, "Goodbye.");
+	exit(EXIT_SUCCESS);
 }

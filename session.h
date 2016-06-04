@@ -36,7 +36,11 @@ struct session_t {
 	int is_ascii;
 	long long restart_pos;
 	char * rnfr_name;
+	int abor_received;
 
+	// connect num limit
+	unsigned int num_clients;
+	unsigned int num_this_ip;
 };
 
 
